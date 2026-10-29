@@ -1,0 +1,15 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: lendz
+      POSTGRES_PASSWORD: lendz
+      POSTGRES_DB: lendz_hub
+    ports:
+      - "5432:5432"
+    volumes:
+      - lendz_pg:/var/lib/postgresql/data
+
+volumes:
+  lendz_pg:

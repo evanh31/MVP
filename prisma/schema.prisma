@@ -1,0 +1,263 @@
+// Postgres-ready schema for the Lendz Executive Sales Outreach analytics hub.
+// Local demo uses the file store (src/lib/store); point DATABASE_URL at Postgres
+// and wire Prisma client when promoting beyond demo mode.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum BotName {
+  LENDZ_RESEARCH
+  LENDZ_AE_ASSISTANT
+  LENDZ_ORCHESTRATOR
+  LENDZ_MATCHING_STRATEGY
+  LENDZ_OUTREACH
+}
+
+enum MatchStatus {
+  OPEN
+  OUTREACH
+  REPLIED
+  CLOSED
+  DISMISSED
+}
+
+enum OutreachStatus {
+  QUEUED
+  SENT
+  DELIVERED
+  BOUNCED
+  OPENED
+  REPLIED
+}
+
+enum OpportunityStage {
+  OPEN
+  OUTREACH
+  REPLIED
+  WON
+  LOST
+}
+
+model IngestEvent {
+  id        String   @id @default(uuid())
+  eventId   String   @unique @map("event_id")
+  ts        DateTime
+  bot       String
+  runId     String   @map("run_id")
+  type      String
+  payload   Json
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@index([type, ts])
+  @@index([bot, ts])
+  @@map("ingest_events")
+}
+
+model SourceSite {
+  id            String    @id @default(uuid())
+  name          String
+  url           String?
+  status        String    @default("active")
+  lastSuccessAt DateTime? @map("last_success_at")
+  loanOriginators LoanOriginator[]
+
+  @@map("source_sites")
+}
+
+model BotRun {
+  id         String    @id @default(uuid())
+  botName    String    @map("bot_name")
+  runId      String    @unique @map("run_id")
+  stage      String?
+  startedAt  DateTime  @map("started_at")
+  finishedAt DateTime? @map("finished_at")
+  status     String
+  error      String?
+  countsJson Json?     @map("counts_json")
+
+  @@index([botName, startedAt])
+  @@map("bot_runs")
+}
+
+model LoanOriginator {
+  id           String   @id @default(uuid())
+  externalKey  String   @unique @map("external_key")
+  name         String
+  company      String
+  profileJson  Json?    @map("profile_json")
+  sourceSiteId String?  @map("source_site_id")
+  sourceSite   SourceSite? @relation(fields: [sourceSiteId], references: [id])
+  firstSeenAt  DateTime @map("first_seen_at")
+  lastSeenAt   DateTime @map("last_seen_at")
+  status       String   @default("new")
+
+  fundings     CompetitorFunding[]
+  edges        PricingEdge[]
+  matches      Match[]
+  opportunities Opportunity[]
+  outreachAttempts OutreachAttempt[]
+
+  @@map("loan_originators")
+}
+
+model CompetitorTarget {
+  id            String    @id @default(uuid())
+  competitorKey String    @unique @map("competitor_key")
+  name          String
+  source        String    @default("pricing_engine")
+  scenarioRef   String?   @map("scenario_ref")
+  edgeSummary   String?   @map("edge_summary")
+  engineRunId   String?   @map("engine_run_id")
+  activeFrom    DateTime  @map("active_from")
+  activeTo      DateTime? @map("active_to")
+
+  fundings      CompetitorFunding[]
+  edges         PricingEdge[]
+  opportunities Opportunity[]
+
+  @@map("competitor_targets")
+}
+
+model CompetitorFunding {
+  id            String   @id @default(uuid())
+  loId          String   @map("lo_id")
+  competitorId  String   @map("competitor_id")
+  fundedAt      DateTime? @map("funded_at")
+  amount        Float?
+  volumeSignal  Float?   @map("volume_signal")
+  observedAt    DateTime @map("observed_at")
+
+  lo          LoanOriginator  @relation(fields: [loId], references: [id])
+  competitor  CompetitorTarget @relation(fields: [competitorId], references: [id])
+
+  @@unique([loId, competitorId])
+  @@map("competitor_fundings")
+}
+
+model PricingEdge {
+  id              String   @id @default(uuid())
+  loId            String   @map("lo_id")
+  competitorId    String   @map("competitor_id")
+  edgeBpsOrLabel  String   @map("edge_bps_or_label")
+  scenarioRef     String?  @map("scenario_ref")
+  volumeFunded    Float?   @map("volume_funded")
+  computedAt      DateTime @map("computed_at")
+  engineRunId     String?  @map("engine_run_id")
+
+  lo         LoanOriginator   @relation(fields: [loId], references: [id])
+  competitor CompetitorTarget @relation(fields: [competitorId], references: [id])
+
+  @@index([loId, competitorId])
+  @@map("pricing_edges")
+}
+
+model AccountExecutive {
+  id              String   @id @default(uuid())
+  aeKey           String   @unique @map("ae_key")
+  name            String
+  email           String
+  interestsJson   Json?    @map("interests_json")
+  active          Boolean  @default(true)
+  orchestratorRef String?  @map("orchestrator_ref")
+  syncSource      String   @default("manual") @map("sync_source")
+
+  matches          Match[]
+  outreachAttempts OutreachAttempt[]
+
+  @@map("account_executives")
+}
+
+model Match {
+  id        String   @id @default(uuid())
+  loId      String   @map("lo_id")
+  aeId      String   @map("ae_id")
+  score     Float
+  reasons   Json
+  status    String   @default("OPEN")
+  createdAt DateTime @map("created_at")
+
+  lo  LoanOriginator   @relation(fields: [loId], references: [id])
+  ae  AccountExecutive @relation(fields: [aeId], references: [id])
+  outreachAttempts OutreachAttempt[]
+  opportunities    Opportunity[]
+
+  @@unique([loId, aeId])
+  @@map("matches")
+}
+
+model OutreachAttempt {
+  id            String   @id @default(uuid())
+  attemptId     String   @unique @map("attempt_id")
+  matchId       String?  @map("match_id")
+  loId          String   @map("lo_id")
+  aeId          String   @map("ae_id")
+  channel       String   @default("email")
+  status        String
+  providerMsgId String?  @map("provider_msg_id")
+  queuedAt      DateTime? @map("queued_at")
+  sentAt        DateTime? @map("sent_at")
+  deliveredAt   DateTime? @map("delivered_at")
+  openedAt      DateTime? @map("opened_at")
+  repliedAt     DateTime? @map("replied_at")
+  bouncedAt     DateTime? @map("bounced_at")
+  updatedAt     DateTime  @map("updated_at")
+
+  match  Match?            @relation(fields: [matchId], references: [id])
+  lo     LoanOriginator    @relation(fields: [loId], references: [id])
+  ae     AccountExecutive  @relation(fields: [aeId], references: [id])
+  events OutreachEvent[]
+
+  @@index([status, updatedAt])
+  @@map("outreach_attempts")
+}
+
+model OutreachEvent {
+  id        String   @id @default(uuid())
+  attemptId String   @map("attempt_id")
+  type      String
+  at        DateTime
+  meta      Json?
+
+  attempt OutreachAttempt @relation(fields: [attemptId], references: [id])
+
+  @@index([attemptId, at])
+  @@map("outreach_events")
+}
+
+model Opportunity {
+  id            String   @id @default(uuid())
+  loId          String   @map("lo_id")
+  competitorId  String   @map("competitor_id")
+  matchId       String?  @map("match_id")
+  stage         String   @default("OPEN")
+  valueEstimate Float?   @map("value_estimate")
+  edgeLabel     String?  @map("edge_label")
+  openedAt      DateTime @map("opened_at")
+  closedAt      DateTime? @map("closed_at")
+
+  lo         LoanOriginator   @relation(fields: [loId], references: [id])
+  competitor CompetitorTarget @relation(fields: [competitorId], references: [id])
+  match      Match?           @relation(fields: [matchId], references: [id])
+
+  @@unique([loId, competitorId])
+  @@map("opportunities")
+}
+
+model DailyRollup {
+  id          String   @id @default(uuid())
+  day         DateTime
+  aeId        String?  @map("ae_id")
+  bot         String?
+  source      String?
+  competitorId String? @map("competitor_id")
+  metricsJson Json     @map("metrics_json")
+
+  @@unique([day, aeId, bot, source, competitorId])
+  @@map("daily_rollups")
+}
